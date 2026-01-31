@@ -1,0 +1,15 @@
+NEVER use these dangerous commands:
+
+❌ migrate:fresh - Drops ALL tables
+❌ migrate:reset - Rolls back ALL migrations
+❌ migrate:rollback - Can drop tables
+❌ db:wipe - Drops ALL tables and views
+❌ Any command with --force in production
+
+
+
+To see All NSSM Services
+
+powershell: 
+
+PS C:\wamp64\www\comfort_reporting_crm\dual-database-app> .\codes\check-all-nssm-services.ps1

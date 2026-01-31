@@ -1,0 +1,20 @@
+/* React Paginate Custom Styles */
+.active_page a {
+    background-color: #2563eb !important;
+    color: white !important;
+    border-color: #2563eb !important;
+}
+
+.active_page a:hover {
+    background-color: #1d4ed8 !important;
+}
+
+.page-item a {
+    display: inline-block;
+    cursor: pointer;
+}
+
+.page-item.disabled a {
+    cursor: not-allowed;
+    opacity: 0.5;
+}

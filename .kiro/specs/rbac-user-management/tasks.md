@@ -1,0 +1,257 @@
+# Implementation Plan: RBAC User Management System
+
+## Overview
+
+This implementation plan covers building a Role-Based Access Control system with PostgreSQL as the primary database, user management with Superadmin/Admin/Manager roles, and a React dashboard. The application will run on port 9000.
+
+## Tasks
+
+- [x] 1. Configure PostgreSQL as Primary Database
+  - [x] 1.1 Update .env file to set PostgreSQL as default connection
+    - Set DB_CONNECTION=pgsql
+    - Configure PG_DB_* environment variables
+    - _Requirements: 7.1_
+  - [x] 1.2 Update database.php config to use PostgreSQL settings
+    - Ensure pgsql connection uses correct env variables
+    - _Requirements: 7.1_
+  - [x] 1.3 Configure application to run on port 9000
+    - Update vite.config.js server port
+    - Update APP_URL in .env
+    - _Requirements: 8.1, 8.2_
+
+- [x] 2. Create Database Migrations for RBAC Schema
+  - [x] 2.1 Create roles table migration
+    - Fields: id, name, display_name, description, timestamps
+    - _Requirements: 7.3_
+  - [x] 2.2 Create permissions table migration
+    - Fields: id, name, display_name, module, timestamps
+    - _Requirements: 7.3_
+  - [x] 2.3 Create role_permissions pivot table migration
+    - Fields: role_id, permission_id
+    - _Requirements: 7.3_
+  - [x] 2.4 Update users table migration for RBAC
+    - Add: is_active, created_by fields
+    - _Requirements: 7.3_
+  - [x] 2.5 Create user_roles pivot table migration
+    - Fields: user_id, role_id, assigned_by, created_at
+    - _Requirements: 7.3_
+
+- [x] 3. Create Eloquent Models with Relationships
+  - [x] 3.1 Create Role model with relationships
+    - HasMany permissions through role_permissions
+    - BelongsToMany users through user_roles
+    - _Requirements: 3.1_
+  - [x] 3.2 Create Permission model with relationships
+    - BelongsToMany roles through role_permissions
+    - _Requirements: 3.1_
+  - [x] 3.3 Update User model with RBAC relationships
+    - BelongsToMany roles through user_roles
+    - HasMany permissions through roles
+    - Add hasPermission() method
+    - _Requirements: 3.2_
+
+- [x] 4. Create Database Seeders for Default Roles and Permissions
+  - [x] 4.1 Create RoleSeeder with Superadmin, Admin, Manager roles
+    - _Requirements: 3.1_
+  - [x] 4.2 Create PermissionSeeder with all permissions
+    - users.create, users.read, users.update, users.delete
+    - roles.read, permissions.read, permissions.assign
+    - dashboard.view
+    - _Requirements: 3.1_
+  - [x] 4.3 Create RolePermissionSeeder to assign permissions to roles
+    - Superadmin: all permissions
+    - Admin: limited permissions
+    - Manager: dashboard.view only
+    - _Requirements: 3.2_
+  - [x] 4.4 Create SuperadminSeeder to create initial superadmin user
+    - _Requirements: 2.1_
+
+- [x] 5. Implement Authentication System
+  - [x] 5.1 Install and configure Laravel Sanctum for API authentication
+    - _Requirements: 1.1_
+  - [x] 5.2 Create AuthController with login, logout, me methods
+    - Login validates credentials and returns token
+    - Logout invalidates token
+    - Me returns current user with permissions
+    - _Requirements: 1.1, 1.2, 1.3_
+  - [x] 5.3 Add authentication routes to api.php
+    - POST /api/auth/login
+    - POST /api/auth/logout
+    - GET /api/auth/me
+    - _Requirements: 9.1-9.7_
+  - [x] 5.4 Write property test for authentication correctness
+    - **Property 1: Authentication Correctness**
+    - **Validates: Requirements 1.1, 1.2, 2.3**
+    - **PBT Status: PASSED (100/100 test cases)**
+  - [x] 5.5 Write property test for password security
+    - **Property 2: Password Security**
+    - **Validates: Requirements 1.4**
+    - **PBT Status: PASSED (100/100 test cases)**
+
+- [x] 6. Implement RBAC Middleware
+  - [x] 6.1 Create CheckPermission middleware
+    - Extract user from request
+    - Check if user's role has required permission
+    - Return 403 if unauthorized
+    - _Requirements: 5.1, 5.2, 5.3_
+  - [x] 6.2 Register middleware in bootstrap/app.php
+    - _Requirements: 5.3_
+  - [x] 6.3 Create CheckRole middleware for role-based access
+    - _Requirements: 3.4_
+  - [x] 6.4 Write property test for permission enforcement
+    - **Property 7: Permission Enforcement**
+    - **Validates: Requirements 3.4, 5.1, 5.2**
+
+- [x] 7. Implement User Management API
+  - [x] 7.1 Create UserController with CRUD operations
+    - index: list users (filtered by role)
+    - store: create user with role
+    - show: get user details
+    - update: update user
+    - destroy: deactivate user
+    - _Requirements: 9.1-9.6_
+  - [x] 7.2 Add role-based filtering to user list
+    - Superadmin sees all users
+    - Admin sees only Managers
+    - _Requirements: 2.4, 4.4_
+  - [x] 7.3 Implement Admin scope restrictions
+    - Admin can only create/modify Managers
+    - Admin cannot modify Superadmin/Admin accounts
+    - _Requirements: 4.1, 4.3_
+  - [x] 7.4 Add user routes with permission middleware
+    - _Requirements: 9.1-9.6_
+  - [x] 7.5 Write property test for user creation persistence
+    - **Property 4: User Creation Persistence**
+    - **Validates: Requirements 2.1**
+  - [x] 7.6 Write property test for email uniqueness
+    - **Property 5: Email Uniqueness Constraint**
+    - **Validates: Requirements 2.5**
+  - [x] 7.7 Write property test for Admin scope restriction
+    - **Property 8: Admin Scope Restriction**
+    - **Validates: Requirements 4.1, 4.2, 4.3**
+  - [x] 7.8 Write property test for role-based user visibility
+    - **Property 9: Role-Based User Visibility**
+    - **Validates: Requirements 2.4, 4.4**
+
+- [x] 8. Implement Role and Permission API
+  - [x] 8.1 Create RoleController with index method
+    - _Requirements: 9.5_
+  - [x] 8.2 Create PermissionController with index method
+    - _Requirements: 9.6_
+  - [x] 8.3 Add routes for roles and permissions
+    - _Requirements: 9.5, 9.6_
+  - [x] 8.4 Write property test for role permission inheritance
+    - **Property 6: Role Permission Inheritance**
+    - **Validates: Requirements 3.2, 2.2**
+
+- [x] 9. Checkpoint - Backend Complete
+  - Ensure all migrations run successfully
+  - Ensure all seeders populate data correctly
+  - Ensure all API endpoints work with proper authentication
+  - Ensure all tests pass, ask the user if questions arise
+
+- [x] 10. Create React Authentication Components
+  - [x] 10.1 Create AuthContext for managing authentication state
+    - Store user, token, permissions
+    - Provide login, logout methods
+    - _Requirements: 1.1, 1.3_
+  - [x] 10.2 Create LoginPage component
+    - Email and password form
+    - Error handling for invalid credentials
+    - Redirect on successful login
+    - _Requirements: 1.1, 1.2_
+  - [x] 10.3 Create ProtectedRoute component
+    - Check authentication status
+    - Redirect to login if not authenticated
+    - _Requirements: 5.1_
+  - [x] 10.4 Create RoleGuard component for permission-based rendering
+    - Accept requiredPermission prop
+    - Render children only if user has permission
+    - _Requirements: 3.4_
+
+- [x] 11. Create React Dashboard Components
+  - [x] 11.1 Create DashboardLayout component
+    - Sidebar navigation
+    - Header with user info and logout
+    - Main content area
+    - _Requirements: 6.1, 6.2, 6.3_
+  - [x] 11.2 Create SuperadminDashboard component
+    - System statistics
+    - User management link
+    - All administrative functions
+    - _Requirements: 6.1_
+  - [x] 11.3 Create AdminDashboard component
+    - Manager management options
+    - Limited statistics
+    - _Requirements: 6.2_
+  - [x] 11.4 Create ManagerDashboard component
+    - Personal statistics
+    - Permitted features only
+    - _Requirements: 6.3_
+  - [x] 11.5 Create Dashboard router to render role-specific dashboard
+    - _Requirements: 6.1, 6.2, 6.3_
+
+- [x] 12. Create React User Management Components
+  - [x] 12.1 Create UserListPage component
+    - Display users in table format
+    - Filter by role (for Superadmin)
+    - Actions: edit, deactivate
+    - _Requirements: 2.4, 4.4_
+  - [x] 12.2 Create UserFormModal component
+    - Create/edit user form
+    - Role selection (filtered by current user's role)
+    - Validation
+    - _Requirements: 2.1, 4.1_
+  - [x] 12.3 Create UserCard component
+    - Display user info
+    - Role badge
+    - Status indicator
+    - _Requirements: 2.4_
+  - [x] 12.4 Create userService for API calls
+    - getUsers, createUser, updateUser, deleteUser
+    - _Requirements: 9.1-9.6_
+
+- [x] 13. Implement React Routing and Navigation
+  - [x] 13.1 Install and configure React Router
+    - _Requirements: 6.1_
+  - [x] 13.2 Create app routes with protected routes
+    - /login - LoginPage
+    - /dashboard - Dashboard (protected)
+    - /users - UserListPage (protected, permission: users.read)
+    - _Requirements: 6.1, 5.1_
+  - [x] 13.3 Create Sidebar navigation component
+    - Show links based on permissions
+    - _Requirements: 6.1, 6.2, 6.3_
+
+- [x] 14. Integrate Frontend with Backend
+  - [x] 14.1 Create api.js service with axios configuration
+    - Base URL configuration for port 9000
+    - Token interceptor for authentication
+    - Error handling interceptor
+    - _Requirements: 8.3_
+  - [x] 14.2 Create authService for authentication API calls
+    - login, logout, getCurrentUser
+    - _Requirements: 1.1, 1.3_
+  - [x] 14.3 Update App.jsx to use AuthContext and routing
+    - _Requirements: 6.1_
+  - [x] 14.4 Write property test for unauthenticated request rejection
+    - **Property 10: Unauthenticated Request Rejection**
+    - **Validates: Requirements 9.7**
+    - **PBT Status: PASSED (97/97 test cases)**
+
+- [x] 15. Final Checkpoint - Full Integration
+  - Ensure frontend connects to backend on port 9000
+  - Ensure login/logout flow works end-to-end
+  - Ensure role-based dashboard rendering works
+  - Ensure user management CRUD operations work
+  - Ensure all tests pass, ask the user if questions arise
+
+## Notes
+
+- All tasks are required for comprehensive implementation
+- Each task references specific requirements for traceability
+- Checkpoints ensure incremental validation
+- Property tests validate universal correctness properties
+- Unit tests validate specific examples and edge cases
+- PostgreSQL must be running and accessible before running migrations
+- Run `php artisan serve --port=9000` for Laravel and configure Vite for port 9000
