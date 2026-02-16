@@ -568,3 +568,34 @@ Route::prefix('downloads')->group(function () {
     });
 });
 
+
+
+// Downloads V2 - Redis-based downloads (TESTING - Parallel to V1)
+// This is a separate implementation for testing Redis performance
+// Does NOT affect the existing Downloads module
+Route::prefix('downloads-v2')->group(function () {
+    // Protected routes that require authentication
+    Route::middleware(['auth:sanctum', 'permission:reports.view'])->group(function () {
+        // GET /api/downloads-v2/partitions - get available partitions (cached in Redis)
+        Route::get('partitions', [\App\Http\Controllers\DownloadsV2Controller::class, 'getPartitions']);
+        
+        // Redis queue-based CSV exports
+        // POST /api/downloads-v2/request - request a CSV export (queued to Redis)
+        Route::post('request', [\App\Http\Controllers\DownloadsV2Controller::class, 'requestExport']);
+        
+        // GET /api/downloads-v2/status/{jobId} - check export job status (real-time from Redis)
+        Route::get('status/{jobId}', [\App\Http\Controllers\DownloadsV2Controller::class, 'checkStatus']);
+        
+        // GET /api/downloads-v2/file/{jobId} - download completed export file
+        Route::get('file/{jobId}', [\App\Http\Controllers\DownloadsV2Controller::class, 'downloadFile']);
+        
+        // GET /api/downloads-v2/my-exports - get user's export history
+        Route::get('my-exports', [\App\Http\Controllers\DownloadsV2Controller::class, 'myExports']);
+        
+        // DELETE /api/downloads-v2/delete/{jobId} - delete an export job and its file
+        Route::delete('delete/{jobId}', [\App\Http\Controllers\DownloadsV2Controller::class, 'deleteExport']);
+        
+        // GET /api/downloads-v2/stats - get Redis queue statistics
+        Route::get('stats', [\App\Http\Controllers\DownloadsV2Controller::class, 'getStats']);
+    });
+});

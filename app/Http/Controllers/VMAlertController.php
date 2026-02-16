@@ -653,6 +653,13 @@ class VMAlertController extends Controller
                     'from_date' => 'required|date',
                     'limit' => 'nullable|integer|min:1|max:1000000',
                     'offset' => 'nullable|integer|min:0',
+                    // Filter parameters
+                    'panelid' => 'nullable|string|max:255',
+                    'dvrip' => 'nullable|string|max:255',
+                    'customer' => 'nullable|string|max:255',
+                    'panel_type' => 'nullable|string|max:255',
+                    'atmid' => 'nullable|string|max:255',
+                    'status' => 'nullable|string|in:O,C',
                 ]);
             }
 
@@ -683,10 +690,12 @@ class VMAlertController extends Controller
                 'from_date' => $fromDate->toDateString(),
                 'limit' => $limit,
                 'offset' => $offset,
+                'filters' => $validated,
                 'via_token' => $request->has('token')
             ]);
 
-            $filename = 'vm_alerts_report_' . $fromDate->format('Y-m-d') . '.csv';
+            // Generate filename in format: "21 Server VM Alerts Report – DD-MM-YYYY.csv"
+            $filename = '21 Server VM Alerts Report – ' . $fromDate->format('d-m-Y') . '.csv';
 
             $headers = [
                 'Content-Type' => 'text/csv; charset=utf-8',
@@ -697,7 +706,7 @@ class VMAlertController extends Controller
                 'Connection' => 'keep-alive',
             ];
 
-            $callback = function () use ($limit, $offset, $fromDate, $toDate) {
+            $callback = function () use ($limit, $offset, $fromDate, $toDate, $validated) {
                 $file = fopen('php://output', 'w');
                 fwrite($file, "\xEF\xBB\xBF");
                 
@@ -713,8 +722,8 @@ class VMAlertController extends Controller
                 $processed = 0;
                 $rowNumber = $offset + 1; // Serial number counter starts from offset + 1
                 
-                // Always use partition router with VM-specific filters
-                $this->exportViaRouterNoFilters($file, $fromDate, $toDate, $limit, $offset, $processed, $rowNumber);
+                // Use partition router with filters
+                $this->exportViaRouterWithFilters($file, $fromDate, $toDate, $validated, $limit, $offset, $processed, $rowNumber);
 
                 fclose($file);
             };
@@ -829,6 +838,132 @@ class VMAlertController extends Controller
             
         } catch (\Exception $e) {
             Log::error('Failed to export via partition router', [
+                'error' => $e->getMessage(),
+                'offset' => $currentOffset ?? $startOffset,
+                'processed' => $processed
+            ]);
+            throw $e;
+        }
+    }
+    
+    /**
+     * Export via partition router WITH filters - downloads filtered VM data
+     * 
+     * @param resource $file File handle
+     * @param Carbon $startDate Start date
+     * @param Carbon $endDate End date
+     * @param array $validated Validated request data with filters
+     * @param int $limit Maximum records
+     * @param int $startOffset Starting offset for batch downloads
+     * @param int &$processed Processed count (by reference)
+     * @param int &$rowNumber Row number counter (by reference)
+     */
+    protected function exportViaRouterWithFilters($file, Carbon $startDate, Carbon $endDate, array $validated, int $limit, int $startOffset, int &$processed, int &$rowNumber): void
+    {
+        try {
+            // Build filter array for partition router
+            // Start with VM-SPECIFIC base filters
+            $filters = [];
+            
+            // VM-SPECIFIC: Status filter
+            if (!empty($validated['status'])) {
+                $filters['vm_status'] = [$validated['status']]; // Single status: O or C
+            } else {
+                $filters['vm_status'] = ['O', 'C']; // Both statuses (default)
+            }
+            $filters['vm_sendtoclient'] = 'S'; // Always filter by sendtoclient = 'S'
+            
+            if (!empty($validated['panelid'])) {
+                $filters['panel_id'] = $validated['panelid'];
+            }
+            
+            // For sites-based filters, get panel IDs first
+            $panelIds = $this->getPanelIdsFromSitesFilters($validated);
+            
+            if ($panelIds !== null) {
+                if (empty($panelIds)) {
+                    // No matching sites, return empty
+                    Log::info("CSV export: No matching sites for filters");
+                    return;
+                }
+                
+                // Use panel IDs filter with partition router
+                $filters['panel_ids'] = $panelIds;
+            }
+            
+            $chunkSize = 500;
+            $currentOffset = $startOffset;
+            
+            while ($processed < $limit) {
+                // Calculate how many records we still need
+                $remaining = $limit - $processed;
+                $fetchSize = min($chunkSize, $remaining);
+                
+                // Query chunk via partition router with filters
+                $options = [
+                    'limit' => $fetchSize,
+                    'offset' => $currentOffset,
+                    'order_by' => 'id',
+                    'order_direction' => 'DESC',
+                ];
+                
+                $results = $this->partitionRouter->queryDateRange($startDate, $endDate, $filters, $options, ['alerts', 'backalerts']);
+                
+                if ($results->isEmpty()) {
+                    Log::info("CSV export: No more data at offset {$currentOffset}");
+                    break;
+                }
+                
+                // Convert to array format
+                $alerts = $results->map(function($record) {
+                    return (array) $record;
+                })->toArray();
+                
+                // Enrich with sites data
+                $enriched = $this->enrichWithSites($alerts);
+                
+                // Write to CSV
+                foreach ($enriched as $report) {
+                    if ($processed >= $limit) break;
+                    
+                    $this->writeCsvRow($file, $report, $rowNumber);
+                    $processed++;
+                    $rowNumber++;
+                    
+                    // Flush output every 100 records
+                    if ($processed % 100 == 0) {
+                        fflush($file);
+                        if (ob_get_level()) {
+                            ob_flush();
+                            flush();
+                        }
+                    }
+                }
+                
+                // Move offset forward
+                $currentOffset += $results->count();
+                
+                // Log progress every 5k records
+                if ($processed % 5000 == 0) {
+                    Log::info("CSV export progress: {$processed} records exported, offset: {$currentOffset}");
+                }
+                
+                // Free memory
+                unset($results, $alerts, $enriched);
+                if ($processed % 1000 == 0) {
+                    gc_collect_cycles();
+                }
+            }
+            
+            Log::info("CSV export completed with filters", [
+                'total_records' => $processed,
+                'final_offset' => $currentOffset,
+                'filters' => $filters,
+                'date' => $startDate->toDateString()
+            ]);
+            
+        } catch (\Exception $e) {
+            Log::error('Failed to export via partition router with filters', [
                 'error' => $e->getMessage(),
                 'offset' => $currentOffset ?? $startOffset,
                 'processed' => $processed

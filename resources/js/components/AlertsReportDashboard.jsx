@@ -137,8 +137,12 @@ const AlertsReportDashboard = () => {
         setExporting(true);
         setError(null); // Clear previous errors
         try {
-            // Only send the date - no filters
-            const params = { from_date: filters.from_date };
+            // Send all active filters to export filtered results
+            const params = { ...filters };
+            // Remove empty filters
+            Object.keys(params).forEach(key => {
+                if (params[key] === '' || params[key] === null) delete params[key];
+            });
             await exportCsv(params);
         } catch (err) {
             console.error('Export failed:', err);
@@ -250,55 +254,35 @@ const AlertsReportDashboard = () => {
                                 </select>
                             </div>
                             
-                            {/* REDIRECT TO DOWNLOADS PAGE - Prevents portal blocking */}
+                            {/* Export CSV Button - Direct export from this page */}
+                            <button 
+                                onClick={handleExport} 
+                                disabled={exporting || !filters.from_date}
+                                className="px-3 py-1.5 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={`Export all alerts for ${filters.from_date || 'selected date'}`}
+                            >
+                                {exporting ? (
+                                    <>
+                                        <SpinnerIcon className="w-4 h-4 animate-spin" />
+                                        <span className="font-medium">Exporting...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <DownloadIcon className="w-4 h-4" />
+                                        <span className="font-medium">Export CSV</span>
+                                    </>
+                                )}
+                            </button>
+                            
+                            {/* Go to Downloads Page Button */}
                             <a 
                                 href="/reports/downloads"
                                 className="px-3 py-1.5 bg-green-600 text-white rounded text-xs hover:bg-green-700 flex items-center gap-1.5 transition-colors"
-                                title="Go to Downloads page for batched downloads that won't block other users"
+                                title="Go to Downloads page for queue-based exports"
                             >
                                 <DownloadIcon className="w-4 h-4" />
                                 <span className="font-medium">Go to Downloads Page</span>
                             </a>
-                            
-                            {/* COMMENTED OUT: Pre-generated and On-demand CSV Downloads
-                            {csvReport ? (
-                                <a 
-                                    href={csvReport.url} 
-                                    download={csvReport.filename}
-                                    className="px-3 py-1.5 bg-green-600 text-white rounded text-xs hover:bg-green-700 flex items-center gap-1.5 transition-colors"
-                                    title={`Instant download - Pre-generated report for ${csvReport.date}`}
-                                >
-                                    <DownloadIcon className="w-4 h-4" />
-                                    <span className="font-medium">Download (Instant)</span>
-                                    <span className="text-green-200">({csvReport.date})</span>
-                                </a>
-                            ) : checkingCsv ? (
-                                <div className="flex items-center gap-1 text-xs text-gray-500">
-                                    <SpinnerIcon className="w-3 h-3 animate-spin" />
-                                    <span>Checking...</span>
-                                </div>
-                            ) : (
-                                <button 
-                                    onClick={handleExport} 
-                                    disabled={exporting || !filters.from_date}
-                                    className="px-3 py-1.5 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title={`Generate and download all alerts for ${filters.from_date || 'selected date'}`}
-                                >
-                                    {exporting ? (
-                                        <>
-                                            <SpinnerIcon className="w-4 h-4 animate-spin" />
-                                            <span className="font-medium">Generating...</span>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <DownloadIcon className="w-4 h-4" />
-                                            <span className="font-medium">Generate & Download</span>
-                                            {filters.from_date && <span className="text-blue-200">({filters.from_date})</span>}
-                                        </>
-                                    )}
-                                </button>
-                            )}
-                            */}
                         </div>
                     </div>
 

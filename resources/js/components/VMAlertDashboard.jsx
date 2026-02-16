@@ -100,11 +100,15 @@ const VMAlertDashboard = () => {
         setError(''); // Clear any previous errors
         
         try {
-            // Only send the date - no filters
-            const params = { from_date: filters.from_date };
+            // Send all active filters to export filtered results
+            const params = { ...filters };
+            // Remove empty filters
+            Object.keys(params).forEach(key => {
+                if (params[key] === '' || params[key] === null) delete params[key];
+            });
             
             // Show progress message
-            console.log('Starting VM alerts export for date:', filters.from_date);
+            console.log('Starting VM alerts export with filters:', params);
             
             await exportVMCsv(params);
             
@@ -237,48 +241,35 @@ const VMAlertDashboard = () => {
                                 </select>
                             </div>
                             
-                            {/* REDIRECT TO DOWNLOADS PAGE - Prevents portal blocking */}
-                            <a 
-                                href="/reports/downloads"
-                                className="px-3 py-1.5 bg-green-600 text-white rounded text-xs hover:bg-green-700 flex items-center gap-1.5 transition-colors"
-                                title="Go to Downloads page for batched downloads that won't block other users"
-                            >
-                                <DownloadIcon className="w-4 h-4" />
-                                <span className="font-medium">Go to Downloads Page</span>
-                            </a>
-                            
-                            {/* COMMENTED OUT: Direct CSV Download - Blocks portal for other users
+                            {/* Export CSV Button - Direct export from this page */}
                             <button 
                                 onClick={handleExport} 
                                 disabled={exporting || !filters.from_date}
                                 className="px-3 py-1.5 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                title={`Generate and download VM alerts for ${filters.from_date || 'selected date'}. WARNING: Large datasets may take several minutes and block other users.`}
+                                title={`Export VM alerts for ${filters.from_date || 'selected date'}`}
                             >
                                 {exporting ? (
                                     <>
                                         <SpinnerIcon className="w-4 h-4 animate-spin" />
-                                        <span className="font-medium">Generating...</span>
+                                        <span className="font-medium">Exporting...</span>
                                     </>
                                 ) : (
                                     <>
                                         <DownloadIcon className="w-4 h-4" />
-                                        <span className="font-medium">Download CSV</span>
-                                        {filters.from_date && <span className="text-blue-200">({filters.from_date})</span>}
+                                        <span className="font-medium">Export CSV</span>
                                     </>
                                 )}
                             </button>
-                            */}
                             
-                            {/* Warning for large datasets */}
-                            {pagination && pagination.total > 500000 && (
-                                <div className="flex items-center gap-1 px-2 py-1 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-                                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                                    </svg>
-                                    <span className="font-medium">Large dataset ({pagination.total.toLocaleString()} records)</span>
-                                    <span>- Use Downloads page for better performance</span>
-                                </div>
-                            )}
+                            {/* Go to Downloads Page Button */}
+                            <a 
+                                href="/reports/downloads"
+                                className="px-3 py-1.5 bg-green-600 text-white rounded text-xs hover:bg-green-700 flex items-center gap-1.5 transition-colors"
+                                title="Go to Downloads page for queue-based exports"
+                            >
+                                <DownloadIcon className="w-4 h-4" />
+                                <span className="font-medium">Go to Downloads Page</span>
+                            </a>
                         </div>
                     </div>
 
