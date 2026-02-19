@@ -9,6 +9,7 @@ import PermissionsPage from '../pages/PermissionsPage';
 import TableSyncDashboard from './TableSyncDashboard';
 import AlertsReportDashboard from './AlertsReportDashboard';
 import VMAlertDashboard from './VMAlertDashboard';
+import UPSReportDashboard from './UPSReportDashboard';
 import DownCommunicationDashboard from './DownCommunicationDashboard';
 import PartitionManagementDashboard from './PartitionManagementDashboard';
 import SitesRMSPage from '../pages/SitesRMSPage';
@@ -161,6 +162,15 @@ function App() {
                         element={
                             <ProtectedRoute requiredPermission="reports.view">
                                 <VMAlertDashboard />
+                            </ProtectedRoute>
+                        } 
+                    />
+                    
+                    <Route 
+                        path="/ups-reports" 
+                        element={
+                            <ProtectedRoute requiredPermission="reports.view">
+                                <UPSReportDashboard />
                             </ProtectedRoute>
                         } 
                     />

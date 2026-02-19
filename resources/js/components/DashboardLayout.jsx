@@ -188,6 +188,7 @@ const DashboardLayout = ({ children }) => {
                 { name: 'All Alerts', href: '/alerts-reports', icon: FileText, permission: 'reports.view', key: 'alerts-reports' },
                 { name: 'VM Alerts', href: '/vm-alerts', icon: Monitor, permission: 'reports.view', key: 'vm-alerts' },
                 { name: 'Recent (15 Min)', href: '/recent-alerts', icon: Clock, permission: 'reports.view', key: 'recent-alerts' },
+                { name: 'UPS', href: '/ups-reports', icon: Zap, permission: 'reports.view', key: 'ups-reports' },
                 { name: 'Daily Report', href: '/reports/daily', icon: Calendar, permission: 'reports.view', key: 'daily-report' },
                 { name: 'Weekly Summary', href: '/reports/weekly', icon: CalendarDays, permission: 'reports.view', key: 'weekly-report' },
                 { name: 'Monthly Report', href: '/reports/monthly', icon: CalendarRange, permission: 'reports.view', key: 'monthly-report' },
@@ -355,6 +356,7 @@ const DashboardLayout = ({ children }) => {
         if (path === '/reports/downloads') return 'downloads';
         if (path === '/reports/uptime') return 'uptime-report';
         if (path === '/reports/sla') return 'sla-report';
+        if (path === '/ups-reports') return 'ups-reports';
         if (path === '/down-communication') return 'down-communication';
         if (path === '/reports/builder') return 'report-builder';
         

@@ -599,3 +599,19 @@ Route::prefix('downloads-v2')->group(function () {
         Route::get('stats', [\App\Http\Controllers\DownloadsV2Controller::class, 'getStats']);
     });
 });
+
+// UPS Reports - Mains/UPS Failure Reports
+Route::prefix('ups-reports')->group(function () {
+    // Protected routes that require authentication
+    Route::middleware(['auth:sanctum', 'permission:reports.view'])->group(function () {
+        // GET /api/ups-reports - paginated UPS reports
+        Route::get('/', [\App\Http\Controllers\UPSReportController::class, 'index']);
+        
+        // GET /api/ups-reports/filter-options - get filter dropdown options
+        Route::get('filter-options', [\App\Http\Controllers\UPSReportController::class, 'filterOptions']);
+        
+        // GET /api/ups-reports/export/csv - export to CSV
+        Route::get('export/csv', [\App\Http\Controllers\UPSReportController::class, 'exportCsv']);
+    });
+});
+
