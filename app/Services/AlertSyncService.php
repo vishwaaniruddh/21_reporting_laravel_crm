@@ -32,6 +32,7 @@ class AlertSyncService
     private SyncLogger $logger;
     private PartitionManager $partitionManager;
     private DateExtractor $dateExtractor;
+    private TimestampValidator $timestampValidator;
     private int $maxRetries;
     private string $connection = 'pgsql';
 
@@ -41,17 +42,20 @@ class AlertSyncService
      * @param SyncLogger $logger Logger service for structured logging
      * @param PartitionManager|null $partitionManager Partition manager service
      * @param DateExtractor|null $dateExtractor Date extractor service
+     * @param TimestampValidator|null $timestampValidator Timestamp validator service
      * @param int $maxRetries Maximum number of retry attempts for failed operations
      */
     public function __construct(
         SyncLogger $logger, 
         ?PartitionManager $partitionManager = null,
         ?DateExtractor $dateExtractor = null,
+        ?TimestampValidator $timestampValidator = null,
         int $maxRetries = 3
     ) {
         $this->logger = $logger;
         $this->partitionManager = $partitionManager ?? new PartitionManager();
         $this->dateExtractor = $dateExtractor ?? new DateExtractor();
+        $this->timestampValidator = $timestampValidator ?? new TimestampValidator();
         $this->maxRetries = $maxRetries;
     }
 
@@ -289,15 +293,19 @@ class AlertSyncService
     {
         return $this->retryWithBackoff(
             function () use ($alertId) {
-                // Use Alert model to fetch from MySQL (READ-ONLY)
-                $alert = Alert::find($alertId);
+                // CRITICAL: Fetch raw data directly from database to avoid timezone conversion
+                // Using DB::table() instead of Alert model to bypass datetime casting
+                $alert = DB::connection('mysql')
+                    ->table('alerts')
+                    ->where('id', $alertId)
+                    ->first();
                 
                 if ($alert === null) {
                     return null;
                 }
                 
-                // Convert model to array for processing
-                return $alert->toArray();
+                // Convert stdClass to array with raw timestamp strings (no conversion)
+                return (array) $alert;
             },
             "Fetch alert {$alertId} from MySQL"
         );
@@ -306,126 +314,213 @@ class AlertSyncService
     /**
      * Update or insert alert in PostgreSQL partition table
      * 
-     * This method performs an upsert operation to the correct partition table:
-     * 1. Extracts date from receivedtime to determine partition
-     * 2. Gets partition table name (e.g., "alerts_2026_01_08")
-     * 3. Ensures partition table exists (creates if needed)
-     * 4. Performs UPSERT to partition table
-     * 5. Updates partition_registry record count
-     * 
-     * CRITICAL: This writes to date-partitioned tables, NOT a single alerts table.
-     * 
-     * Uses retry logic with exponential backoff for transient failures.
-     * Wraps operation in a transaction for atomicity.
+     * SIMPLIFIED APPROACH:
+     * 1. Always fetch fresh data from MySQL at upsert time
+     * 2. Use ALL values from MySQL as-is (including datetime columns)
+     * 3. Validate after upsert to confirm values match
      * 
      * @param int $alertId The ID of the alert to update
-     * @param array $data Alert data from MySQL
+     * @param array $data Alert data from MySQL (not used, will fetch fresh)
      * @return bool True if update succeeded, false otherwise (errors are logged)
      */
     private function updateAlertInPostgres(int $alertId, array $data): bool
     {
         try {
             return $this->retryWithBackoff(
-                function () use ($alertId, $data) {
-                    // Step 1: Extract date from receivedtime to determine partition
-                    if (!isset($data['receivedtime'])) {
+                function () use ($alertId) {
+                    // STEP 1: Fetch FRESH data from MySQL (raw, no conversion)
+                    $mysqlData = DB::connection('mysql')
+                        ->table('alerts')
+                        ->where('id', $alertId)
+                        ->first();
+                    
+                    if (!$mysqlData) {
+                        throw new Exception("Alert {$alertId} not found in MySQL");
+                    }
+                    
+                    // Convert to array
+                    $mysqlData = (array) $mysqlData;
+                    
+                    // STEP 2: Determine partition table
+                    if (!isset($mysqlData['receivedtime'])) {
                         throw new Exception("Alert {$alertId} missing receivedtime - cannot determine partition");
                     }
                     
-                    $date = $this->dateExtractor->extractDate($data['receivedtime']);
-                    
-                    // Step 2: Get partition table name (e.g., "alerts_2026_01_08")
+                    $date = $this->dateExtractor->extractDate($mysqlData['receivedtime']);
                     $partitionTable = $this->partitionManager->getPartitionTableName($date);
                     
                     $this->logger->logInfo('Syncing alert to partition', [
                         'alert_id' => $alertId,
-                        'receivedtime' => $data['receivedtime'],
-                        'partition_date' => $date->toDateString(),
+                        'receivedtime' => $mysqlData['receivedtime'],
                         'partition_table' => $partitionTable
                     ]);
                     
-                    // Step 3: Ensure partition table exists (creates if needed with retry logic)
+                    // STEP 3: Ensure partition exists
                     $this->partitionManager->ensurePartitionExists($date);
                     
-                    // Step 4: Start a transaction for atomicity
+                    // STEP 4: Prepare upsert data - USE ALL VALUES FROM MYSQL AS-IS
+                    $now = now();
+                    $upsertData = [
+                        'id' => $mysqlData['id'],
+                        'panelid' => $mysqlData['panelid'] ?? null,
+                        'seqno' => $mysqlData['seqno'] ?? null,
+                        'zone' => $mysqlData['zone'] ?? null,
+                        'alarm' => $mysqlData['alarm'] ?? null,
+                        'createtime' => $mysqlData['createtime'] ?? null,      // From MySQL as-is
+                        'receivedtime' => $mysqlData['receivedtime'] ?? null,  // From MySQL as-is
+                        'closedtime' => $mysqlData['closedtime'] ?? null,      // From MySQL as-is
+                        'comment' => $mysqlData['comment'] ?? null,
+                        'status' => $mysqlData['status'] ?? null,
+                        'sendtoclient' => $mysqlData['sendtoclient'] ?? null,
+                        'closedBy' => $mysqlData['closedBy'] ?? null,
+                        'sendip' => $mysqlData['sendip'] ?? null,
+                        'alerttype' => $mysqlData['alerttype'] ?? null,
+                        'location' => $mysqlData['location'] ?? null,
+                        'priority' => $mysqlData['priority'] ?? null,
+                        'AlertUserStatus' => $mysqlData['AlertUserStatus'] ?? null,
+                        'level' => $mysqlData['level'] ?? null,
+                        'sip2' => $mysqlData['sip2'] ?? null,
+                        'c_status' => $mysqlData['c_status'] ?? null,
+                        'auto_alert' => $mysqlData['auto_alert'] ?? null,
+                        'critical_alerts' => $mysqlData['critical_alerts'] ?? null,
+                        'Readstatus' => $mysqlData['Readstatus'] ?? null,
+                        'synced_at' => $now,
+                        'sync_batch_id' => $mysqlData['sync_batch_id'] ?? 0,
+                    ];
+                    
+                    // STEP 5: Perform UPSERT with explicit timestamp casting to prevent timezone conversion
                     DB::connection($this->connection)->beginTransaction();
                     
                     try {
-                        // Prepare data for upsert
-                        $now = now();
-                        $upsertData = [
-                            'id' => $alertId,
-                            'panelid' => $data['panelid'] ?? null,
-                            'seqno' => $data['seqno'] ?? null,
-                            'zone' => $data['zone'] ?? null,
-                            'alarm' => $data['alarm'] ?? null,
-                            'createtime' => $data['createtime'] ?? null,
-                            'receivedtime' => $data['receivedtime'] ?? null,
-                            'comment' => $data['comment'] ?? null,
-                            'status' => $data['status'] ?? null,
-                            'sendtoclient' => $data['sendtoclient'] ?? null,
-                            'closedBy' => $data['closedBy'] ?? null,
-                            'closedtime' => $data['closedtime'] ?? null,
-                            'sendip' => $data['sendip'] ?? null,
-                            'alerttype' => $data['alerttype'] ?? null,
-                            'location' => $data['location'] ?? null,
-                            'priority' => $data['priority'] ?? null,
-                            'AlertUserStatus' => $data['AlertUserStatus'] ?? null,
-                            'level' => $data['level'] ?? null,
-                            'sip2' => $data['sip2'] ?? null,
-                            'c_status' => $data['c_status'] ?? null,
-                            'auto_alert' => $data['auto_alert'] ?? null,
-                            'critical_alerts' => $data['critical_alerts'] ?? null,
-                            'Readstatus' => $data['Readstatus'] ?? null,
-                            'synced_at' => $now,
-                            'sync_batch_id' => $data['sync_batch_id'] ?? 0,
+                        // Using raw SQL to ensure timestamps are preserved exactly as-is
+                        $sql = "
+                            INSERT INTO {$partitionTable} (
+                                id, panelid, seqno, zone, alarm,
+                                createtime, receivedtime, closedtime,
+                                comment, status, sendtoclient, \"closedBy\", sendip,
+                                alerttype, location, priority, \"AlertUserStatus\",
+                                level, sip2, c_status, auto_alert, critical_alerts,
+                                \"Readstatus\", synced_at, sync_batch_id
+                            ) VALUES (
+                                ?, ?, ?, ?, ?,
+                                ?::timestamp, ?::timestamp, " . ($upsertData['closedtime'] ? "?::timestamp" : "NULL") . ",
+                                ?, ?, ?, ?, ?,
+                                ?, ?, ?, ?,
+                                ?, ?, ?, ?, ?,
+                                ?, NOW(), ?
+                            )
+                            ON CONFLICT (id) DO UPDATE SET
+                                panelid = EXCLUDED.panelid,
+                                seqno = EXCLUDED.seqno,
+                                zone = EXCLUDED.zone,
+                                alarm = EXCLUDED.alarm,
+                                createtime = EXCLUDED.createtime,
+                                receivedtime = EXCLUDED.receivedtime,
+                                closedtime = EXCLUDED.closedtime,
+                                comment = EXCLUDED.comment,
+                                status = EXCLUDED.status,
+                                sendtoclient = EXCLUDED.sendtoclient,
+                                \"closedBy\" = EXCLUDED.\"closedBy\",
+                                sendip = EXCLUDED.sendip,
+                                alerttype = EXCLUDED.alerttype,
+                                location = EXCLUDED.location,
+                                priority = EXCLUDED.priority,
+                                \"AlertUserStatus\" = EXCLUDED.\"AlertUserStatus\",
+                                level = EXCLUDED.level,
+                                sip2 = EXCLUDED.sip2,
+                                c_status = EXCLUDED.c_status,
+                                auto_alert = EXCLUDED.auto_alert,
+                                critical_alerts = EXCLUDED.critical_alerts,
+                                \"Readstatus\" = EXCLUDED.\"Readstatus\",
+                                synced_at = NOW(),
+                                sync_batch_id = EXCLUDED.sync_batch_id
+                        ";
+                        
+                        $bindings = [
+                            $upsertData['id'],
+                            $upsertData['panelid'],
+                            $upsertData['seqno'],
+                            $upsertData['zone'],
+                            $upsertData['alarm'],
+                            $upsertData['createtime'],
+                            $upsertData['receivedtime']
                         ];
                         
-                        // Perform UPSERT to partition table
-                        // If record exists (by id), update it; otherwise insert
-                        DB::connection($this->connection)->table($partitionTable)->upsert(
-                            [$upsertData],
-                            ['id'], // Unique key to check for conflicts
-                            [ // Columns to update if record exists
-                                'panelid',
-                                'seqno',
-                                'zone',
-                                'alarm',
-                                'createtime',
-                                'receivedtime',
-                                'comment',
-                                'status',
-                                'sendtoclient',
-                                'closedBy',
-                                'closedtime',
-                                'sendip',
-                                'alerttype',
-                                'location',
-                                'priority',
-                                'AlertUserStatus',
-                                'level',
-                                'sip2',
-                                'c_status',
-                                'auto_alert',
-                                'critical_alerts',
-                                'Readstatus',
-                                'synced_at',
-                                'sync_batch_id',
-                            ]
-                        );
+                        if ($upsertData['closedtime']) {
+                            $bindings[] = $upsertData['closedtime'];
+                        }
                         
-                        // Step 5: Update partition_registry record count
-                        // Note: This increments even for updates, which is acceptable
-                        // as it tracks total operations. For exact counts, use partition manager's
-                        // getPartitionRecordCount() method which queries the actual table.
+                        $bindings = array_merge($bindings, [
+                            $upsertData['comment'],
+                            $upsertData['status'],
+                            $upsertData['sendtoclient'],
+                            $upsertData['closedBy'],
+                            $upsertData['sendip'],
+                            $upsertData['alerttype'],
+                            $upsertData['location'],
+                            $upsertData['priority'],
+                            $upsertData['AlertUserStatus'],
+                            $upsertData['level'],
+                            $upsertData['sip2'],
+                            $upsertData['c_status'],
+                            $upsertData['auto_alert'],
+                            $upsertData['critical_alerts'],
+                            $upsertData['Readstatus'],
+                            $upsertData['sync_batch_id']
+                        ]);
+                        
+                        DB::connection($this->connection)->statement($sql, $bindings);
+                        
+                        // STEP 6: VALIDATE - Fetch back and compare
+                        $pgData = DB::connection($this->connection)
+                            ->table($partitionTable)
+                            ->where('id', $alertId)
+                            ->first();
+                        
+                        if (!$pgData) {
+                            throw new Exception("Alert {$alertId} not found in PostgreSQL after upsert");
+                        }
+                        
+                        // Compare critical columns
+                        $mismatches = [];
+                        
+                        // Check datetime columns
+                        if ($mysqlData['createtime'] !== $pgData->createtime) {
+                            $mismatches[] = "createtime: MySQL={$mysqlData['createtime']}, PG={$pgData->createtime}";
+                        }
+                        if ($mysqlData['receivedtime'] !== $pgData->receivedtime) {
+                            $mismatches[] = "receivedtime: MySQL={$mysqlData['receivedtime']}, PG={$pgData->receivedtime}";
+                        }
+                        if ($mysqlData['closedtime'] !== $pgData->closedtime) {
+                            $mismatches[] = "closedtime: MySQL=" . ($mysqlData['closedtime'] ?? 'NULL') . ", PG=" . ($pgData->closedtime ?? 'NULL');
+                        }
+                        
+                        // Check other important columns
+                        if ($mysqlData['status'] !== $pgData->status) {
+                            $mismatches[] = "status: MySQL={$mysqlData['status']}, PG={$pgData->status}";
+                        }
+                        if ($mysqlData['closedBy'] !== $pgData->closedBy) {
+                            $mismatches[] = "closedBy: MySQL=" . ($mysqlData['closedBy'] ?? 'NULL') . ", PG=" . ($pgData->closedBy ?? 'NULL');
+                        }
+                        
+                        if (!empty($mismatches)) {
+                            $this->logger->logWarning('Column value mismatches detected after upsert', [
+                                'alert_id' => $alertId,
+                                'partition_table' => $partitionTable,
+                                'mismatches' => $mismatches
+                            ]);
+                            
+                            // Log but don't fail - this helps us identify issues
+                        } else {
+                            $this->logger->logInfo('All columns match after upsert', [
+                                'alert_id' => $alertId,
+                                'partition_table' => $partitionTable
+                            ]);
+                        }
+                        
                         $this->partitionManager->incrementRecordCount($partitionTable, 1);
                         
                         DB::connection($this->connection)->commit();
-                        
-                        $this->logger->logInfo('Alert synced to partition successfully', [
-                            'alert_id' => $alertId,
-                            'partition_table' => $partitionTable
-                        ]);
                         
                         return true;
                         

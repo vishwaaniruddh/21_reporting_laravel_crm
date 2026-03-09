@@ -41,6 +41,11 @@ class DateGroupedSyncService
     private PartitionManager $partitionManager;
     
     /**
+     * TimestampValidator service for timestamp validation
+     */
+    private TimestampValidator $timestampValidator;
+    
+    /**
      * PartitionErrorQueueService for error handling
      */
     private ?PartitionErrorQueueService $errorQueueService = null;
@@ -65,15 +70,18 @@ class DateGroupedSyncService
      * 
      * @param DateExtractor|null $dateExtractor Optional DateExtractor instance
      * @param PartitionManager|null $partitionManager Optional PartitionManager instance
+     * @param TimestampValidator|null $timestampValidator Optional TimestampValidator instance
      * @param int|null $batchSize Optional batch size override
      */
     public function __construct(
         ?DateExtractor $dateExtractor = null,
         ?PartitionManager $partitionManager = null,
+        ?TimestampValidator $timestampValidator = null,
         ?int $batchSize = null
     ) {
         $this->dateExtractor = $dateExtractor ?? new DateExtractor();
         $this->partitionManager = $partitionManager ?? new PartitionManager($this->dateExtractor);
+        $this->timestampValidator = $timestampValidator ?? new TimestampValidator();
         $this->batchSize = $batchSize ?? (int) config('pipeline.batch_size', 10000);
     }
     
@@ -516,21 +524,28 @@ class DateGroupedSyncService
     {
         $now = now();
         
+        // Get existing record IDs to determine which are updates vs inserts
+        $alertIds = $alerts->pluck('id')->toArray();
+        $existingRecords = DB::connection($this->connection)
+            ->table($partitionTable)
+            ->whereIn('id', $alertIds)
+            ->get()
+            ->keyBy('id');
+        
         // Prepare data for bulk insert - mirror MySQL alerts structure
-        $insertData = $alerts->map(function ($alert) use ($batchId, $now) {
-            return [
+        $insertData = $alerts->map(function ($alert) use ($batchId, $now, $existingRecords, $partitionTable) {
+            $isExisting = $existingRecords->has($alert->id);
+            
+            $preparedData = [
                 'id' => $alert->id,
                 'panelid' => $alert->panelid,
                 'seqno' => $alert->seqno,
                 'zone' => $alert->zone,
                 'alarm' => $alert->alarm,
-                'createtime' => $alert->createtime,
-                'receivedtime' => $alert->receivedtime,
                 'comment' => $alert->comment,
                 'status' => $alert->status,
                 'sendtoclient' => $alert->sendtoclient,
                 'closedBy' => $alert->closedBy,
-                'closedtime' => $alert->closedtime,
                 'sendip' => $alert->sendip,
                 'alerttype' => $alert->alerttype,
                 'location' => $alert->location,
@@ -545,27 +560,58 @@ class DateGroupedSyncService
                 'synced_at' => $now,
                 'sync_batch_id' => $batchId,
             ];
+            
+            // CRITICAL: Preserve original timestamps if record exists
+            if ($isExisting) {
+                $existing = $existingRecords->get($alert->id);
+                $preparedData['createtime'] = $existing->createtime;
+                $preparedData['receivedtime'] = $existing->receivedtime;
+                $preparedData['closedtime'] = $existing->closedtime;
+                
+                Log::debug('Preserving original timestamps for existing record', [
+                    'alert_id' => $alert->id,
+                    'partition_table' => $partitionTable,
+                ]);
+            } else {
+                // New record - use timestamps from MySQL
+                $preparedData['createtime'] = $alert->createtime;
+                $preparedData['receivedtime'] = $alert->receivedtime;
+                $preparedData['closedtime'] = $alert->closedtime;
+                
+                // TIMESTAMP VALIDATION: Verify timestamps match before insert (new records only)
+                $sourceData = $alert->toArray();
+                $validation = $this->timestampValidator->validateBeforeSync($sourceData, $preparedData, $alert->id);
+                
+                if (!$validation['valid']) {
+                    Log::error('Timestamp validation failed during batch insert', [
+                        'alert_id' => $alert->id,
+                        'errors' => $validation['errors'],
+                        'partition_table' => $partitionTable,
+                    ]);
+                    throw new Exception("Timestamp validation failed for alert {$alert->id}: " . implode('; ', $validation['errors']));
+                }
+            }
+            
+            return $preparedData;
         })->toArray();
         
         // Use chunked upsert for very large date groups to prevent memory issues
         // UPSERT: Insert new records or update existing ones (prevents duplicate key errors)
+        // CRITICAL: Timestamps (createtime, receivedtime, closedtime) are NOT in update list
         $chunks = array_chunk($insertData, 1000);
         foreach ($chunks as $chunk) {
             DB::connection($this->connection)->table($partitionTable)->upsert(
                 $chunk,
                 ['id'], // Unique key to check for conflicts
-                [ // Columns to update if record exists
+                [ // Columns to update if record exists (excludes createtime, receivedtime, closedtime)
                     'panelid',
                     'seqno',
                     'zone',
                     'alarm',
-                    'createtime',
-                    'receivedtime',
                     'comment',
                     'status',
                     'sendtoclient',
                     'closedBy',
-                    'closedtime',
                     'sendip',
                     'alerttype',
                     'location',
@@ -579,6 +625,8 @@ class DateGroupedSyncService
                     'Readstatus',
                     'synced_at',
                     'sync_batch_id',
+                    // NOTE: createtime, receivedtime, closedtime are NOT updated
+                    // They are preserved from the original insert
                 ]
             );
         }

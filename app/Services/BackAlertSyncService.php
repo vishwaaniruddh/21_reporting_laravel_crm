@@ -137,11 +137,19 @@ class BackAlertSyncService
 
     /**
      * Process a single update log entry
+     * 
+     * SIMPLIFIED APPROACH:
+     * 1. Fetch fresh data from MySQL at upsert time
+     * 2. Use ALL values from MySQL as-is
+     * 3. Validate after upsert
      */
     private function processUpdateLogEntry(BackAlertUpdateLog $updateLog): void
     {
-        // Get the backalert record
-        $backAlert = BackAlert::find($updateLog->backalert_id);
+        // STEP 1: Fetch FRESH data from MySQL (raw, no conversion)
+        $backAlert = DB::connection('mysql')
+            ->table('backalerts')
+            ->where('id', $updateLog->backalert_id)
+            ->first();
         
         if (!$backAlert) {
             throw new Exception("BackAlert record not found: {$updateLog->backalert_id}");
@@ -170,43 +178,157 @@ class BackAlertSyncService
 
     /**
      * Upsert a backalert record to a partition table
+     * 
+     * SIMPLIFIED: Use ALL values from MySQL as-is, then validate
      */
-    private function upsertBackAlertToPartition(BackAlert $backAlert, string $partitionTable): void
+    private function upsertBackAlertToPartition($backAlert, string $partitionTable): void
     {
         $now = now();
         
+        // Convert stdClass to array
+        $backAlertData = (array) $backAlert;
+        
+        // STEP 1: Prepare data - USE ALL VALUES FROM MYSQL AS-IS
         $data = [
-            'id' => $backAlert->id,
-            'panelid' => $backAlert->panelid,
-            'seqno' => $backAlert->seqno,
-            'zone' => $backAlert->zone,
-            'alarm' => $backAlert->alarm,
-            'createtime' => $backAlert->createtime,
-            'receivedtime' => $backAlert->receivedtime,
-            'comment' => $backAlert->comment,
-            'status' => $backAlert->status,
-            'sendtoclient' => $backAlert->sendtoclient,
-            'closedby' => $backAlert->closedBy, // Note: PostgreSQL column is lowercase
-            'closedtime' => $backAlert->closedtime,
-            'sendip' => $backAlert->sendip,
-            'alerttype' => $backAlert->alerttype,
-            'location' => $backAlert->location,
-            'priority' => $backAlert->priority,
-            'alertuserstatus' => $backAlert->AlertUserStatus, // Note: PostgreSQL column is lowercase
-            'level' => $backAlert->level,
-            'sip2' => $backAlert->sip2,
-            'c_status' => $backAlert->c_status,
-            'auto_alert' => $backAlert->auto_alert,
-            'critical_alerts' => $backAlert->critical_alerts,
+            'id' => $backAlertData['id'],
+            'panelid' => $backAlertData['panelid'] ?? null,
+            'seqno' => $backAlertData['seqno'] ?? null,
+            'zone' => $backAlertData['zone'] ?? null,
+            'alarm' => $backAlertData['alarm'] ?? null,
+            'createtime' => $backAlertData['createtime'] ?? null,      // From MySQL as-is
+            'receivedtime' => $backAlertData['receivedtime'] ?? null,  // From MySQL as-is
+            'closedtime' => $backAlertData['closedtime'] ?? null,      // From MySQL as-is
+            'comment' => $backAlertData['comment'] ?? null,
+            'status' => $backAlertData['status'] ?? null,
+            'sendtoclient' => $backAlertData['sendtoclient'] ?? null,
+            'closedby' => $backAlertData['closedBy'] ?? null,
+            'sendip' => $backAlertData['sendip'] ?? null,
+            'alerttype' => $backAlertData['alerttype'] ?? null,
+            'location' => $backAlertData['location'] ?? null,
+            'priority' => $backAlertData['priority'] ?? null,
+            'alertuserstatus' => $backAlertData['AlertUserStatus'] ?? null,
+            'level' => $backAlertData['level'] ?? null,
+            'sip2' => $backAlertData['sip2'] ?? null,
+            'c_status' => $backAlertData['c_status'] ?? null,
+            'auto_alert' => $backAlertData['auto_alert'] ?? null,
+            'critical_alerts' => $backAlertData['critical_alerts'] ?? null,
             'synced_at' => $now,
-            'sync_batch_id' => -2, // Special batch ID for backalert updates
+            'sync_batch_id' => -2,
         ];
 
-        DB::connection($this->connection)->table($partitionTable)->upsert(
-            [$data],
-            ['id'], // Unique key
-            array_keys($data) // Update all columns on conflict
-        );
+        // STEP 2: Perform UPSERT with explicit timestamp casting to prevent timezone conversion
+        // Using raw SQL to ensure timestamps are preserved exactly as-is
+        $sql = "
+            INSERT INTO {$partitionTable} (
+                id, panelid, seqno, zone, alarm,
+                createtime, receivedtime, closedtime,
+                comment, status, sendtoclient, closedby, sendip,
+                alerttype, location, priority, alertuserstatus,
+                level, sip2, c_status, auto_alert, critical_alerts,
+                synced_at, sync_batch_id
+            ) VALUES (
+                ?, ?, ?, ?, ?,
+                ?::timestamp, ?::timestamp, " . ($data['closedtime'] ? "?::timestamp" : "NULL") . ",
+                ?, ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, ?, ?,
+                NOW(), ?
+            )
+            ON CONFLICT (id) DO UPDATE SET
+                panelid = EXCLUDED.panelid,
+                seqno = EXCLUDED.seqno,
+                zone = EXCLUDED.zone,
+                alarm = EXCLUDED.alarm,
+                createtime = EXCLUDED.createtime,
+                receivedtime = EXCLUDED.receivedtime,
+                closedtime = EXCLUDED.closedtime,
+                comment = EXCLUDED.comment,
+                status = EXCLUDED.status,
+                sendtoclient = EXCLUDED.sendtoclient,
+                closedby = EXCLUDED.closedby,
+                sendip = EXCLUDED.sendip,
+                alerttype = EXCLUDED.alerttype,
+                location = EXCLUDED.location,
+                priority = EXCLUDED.priority,
+                alertuserstatus = EXCLUDED.alertuserstatus,
+                level = EXCLUDED.level,
+                sip2 = EXCLUDED.sip2,
+                c_status = EXCLUDED.c_status,
+                auto_alert = EXCLUDED.auto_alert,
+                critical_alerts = EXCLUDED.critical_alerts,
+                synced_at = NOW(),
+                sync_batch_id = EXCLUDED.sync_batch_id
+        ";
+        
+        $bindings = [
+            $data['id'],
+            $data['panelid'],
+            $data['seqno'],
+            $data['zone'],
+            $data['alarm'],
+            $data['createtime'],
+            $data['receivedtime']
+        ];
+        
+        if ($data['closedtime']) {
+            $bindings[] = $data['closedtime'];
+        }
+        
+        $bindings = array_merge($bindings, [
+            $data['comment'],
+            $data['status'],
+            $data['sendtoclient'],
+            $data['closedby'],
+            $data['sendip'],
+            $data['alerttype'],
+            $data['location'],
+            $data['priority'],
+            $data['alertuserstatus'],
+            $data['level'],
+            $data['sip2'],
+            $data['c_status'],
+            $data['auto_alert'],
+            $data['critical_alerts'],
+            $data['sync_batch_id']
+        ]);
+        
+        DB::connection($this->connection)->statement($sql, $bindings);
+        
+        // STEP 3: VALIDATE - Fetch back and compare
+        $pgData = DB::connection($this->connection)
+            ->table($partitionTable)
+            ->where('id', $backAlertData['id'])
+            ->first();
+        
+        if (!$pgData) {
+            throw new Exception("BackAlert {$backAlertData['id']} not found in PostgreSQL after upsert");
+        }
+        
+        // Compare critical columns
+        $mismatches = [];
+        
+        if ($backAlertData['createtime'] !== $pgData->createtime) {
+            $mismatches[] = "createtime: MySQL={$backAlertData['createtime']}, PG={$pgData->createtime}";
+        }
+        if ($backAlertData['receivedtime'] !== $pgData->receivedtime) {
+            $mismatches[] = "receivedtime: MySQL={$backAlertData['receivedtime']}, PG={$pgData->receivedtime}";
+        }
+        if ($backAlertData['closedtime'] !== $pgData->closedtime) {
+            $mismatches[] = "closedtime: MySQL=" . ($backAlertData['closedtime'] ?? 'NULL') . ", PG=" . ($pgData->closedtime ?? 'NULL');
+        }
+        
+        if (!empty($mismatches)) {
+            Log::warning('BackAlert column value mismatches detected after upsert', [
+                'backalert_id' => $backAlertData['id'],
+                'partition_table' => $partitionTable,
+                'mismatches' => $mismatches
+            ]);
+        } else {
+            Log::debug('BackAlert all columns match after upsert', [
+                'backalert_id' => $backAlertData['id'],
+                'partition_table' => $partitionTable
+            ]);
+        }
     }
 
     /**
