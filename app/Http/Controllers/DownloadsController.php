@@ -41,6 +41,7 @@ class DownloadsController extends Controller
         try {
             $validated = $request->validate([
                 'type' => 'required|string|in:all-alerts,vm-alerts',
+                'days' => 'nullable|integer|min:1|max:365',
             ]);
 
             // IMPORTANT: Close session to allow parallel requests
@@ -49,17 +50,34 @@ class DownloadsController extends Controller
             }
 
             $type = $validated['type'];
+            $days = $validated['days'] ?? 90; // Default to last 90 days
             
-            // Get all partition dates with combined statistics
-            $allStats = PartitionRegistry::getAllCombinedStats();
+            // Get recent partition dates only (performance optimization)
+            $cutoffDate = Carbon::now()->subDays($days);
             
-            // Format for frontend with ACTUAL counts
+            $allStats = PartitionRegistry::where('partition_date', '>=', $cutoffDate->toDateString())
+                ->distinct('partition_date')
+                ->orderBy('partition_date', 'desc')
+                ->pluck('partition_date')
+                ->map(function ($date) {
+                    return PartitionRegistry::getCombinedStatsForDate(Carbon::parse($date));
+                });
+            
+            // Format for frontend
             $partitions = $allStats->map(function ($stats) use ($type) {
                 $date = Carbon::parse($stats['date']);
                 
-                if ($type === 'vm-alerts') {
-                    // For VM alerts, get the ACTUAL filtered count
-                    $actualCount = $this->getVMAlertCount($date);
+                // For recent dates (last 7 days), get actual counts from tables
+                // For older dates, use registry counts (faster)
+                $isRecent = $date->isAfter(Carbon::now()->subDays(7));
+                
+                if ($isRecent) {
+                    // Get actual count from tables for recent dates
+                    if ($type === 'vm-alerts') {
+                        $actualCount = $this->getVMAlertCount($date);
+                    } else {
+                        $actualCount = $this->getAllAlertCount($date);
+                    }
                     
                     return [
                         'date' => $stats['date'],
@@ -68,19 +86,38 @@ class DownloadsController extends Controller
                         'backalerts_table' => $stats['backalerts_table'],
                         'alerts_count' => $stats['alerts_count'],
                         'backalerts_count' => $stats['backalerts_count'],
+                        'is_estimate' => false,
+                        'is_recent' => true,
                     ];
                 } else {
-                    // For all-alerts, get the ACTUAL count (no filters)
-                    $actualCount = $this->getAllAlertCount($date);
-                    
-                    return [
-                        'date' => $stats['date'],
-                        'records' => $actualCount,
-                        'alerts_table' => $stats['alerts_table'],
-                        'backalerts_table' => $stats['backalerts_table'],
-                        'alerts_count' => $stats['alerts_count'],
-                        'backalerts_count' => $stats['backalerts_count'],
-                    ];
+                    // Use registry counts for older dates (faster)
+                    if ($type === 'vm-alerts') {
+                        // For VM alerts, estimate ~70% of total
+                        $estimatedCount = (int) ($stats['total_count'] * 0.7);
+                        
+                        return [
+                            'date' => $stats['date'],
+                            'records' => $estimatedCount,
+                            'alerts_table' => $stats['alerts_table'],
+                            'backalerts_table' => $stats['backalerts_table'],
+                            'alerts_count' => $stats['alerts_count'],
+                            'backalerts_count' => $stats['backalerts_count'],
+                            'is_estimate' => true,
+                            'is_recent' => false,
+                        ];
+                    } else {
+                        // For all-alerts, use the registry total
+                        return [
+                            'date' => $stats['date'],
+                            'records' => $stats['total_count'],
+                            'alerts_table' => $stats['alerts_table'],
+                            'backalerts_table' => $stats['backalerts_table'],
+                            'alerts_count' => $stats['alerts_count'],
+                            'backalerts_count' => $stats['backalerts_count'],
+                            'is_estimate' => false,
+                            'is_recent' => false,
+                        ];
+                    }
                 }
             })
             ->filter(function ($partition) {
@@ -92,6 +129,11 @@ class DownloadsController extends Controller
             return response()->json([
                 'success' => true,
                 'data' => $partitions,
+                'meta' => [
+                    'days_shown' => $days,
+                    'cutoff_date' => $cutoffDate->toDateString(),
+                    'recent_threshold' => Carbon::now()->subDays(7)->toDateString(),
+                ],
             ]);
 
         } catch (\Exception $e) {

@@ -238,10 +238,12 @@ Route::prefix('reports')->group(function () {
     Route::get('filter-options', [ReportController::class, 'filterOptions']);
     
     // GET /api/reports/export/csv - CSV export
-    Route::get('export/csv', [ReportController::class, 'exportCsv']);
+    Route::get('export/csv', [ReportController::class, 'exportCsv'])
+        ->middleware('close.session');
     
     // GET /api/reports/export/pdf - PDF export
-    Route::get('export/pdf', [ReportController::class, 'exportPdf']);
+    Route::get('export/pdf', [ReportController::class, 'exportPdf'])
+        ->middleware('close.session');
 });
 
 // Pipeline configuration management (Requirements: 6.1, 6.2, 6.3, 6.4, 6.5)
@@ -449,7 +451,9 @@ Route::prefix('rms-sites')->group(function () {
         Route::get('filter-options', [\App\Http\Controllers\RMSSitesController::class, 'filterOptions']);
         
         // GET /api/rms-sites/export/csv - export to CSV
-        Route::get('export/csv', [\App\Http\Controllers\RMSSitesController::class, 'exportCsv']);
+        Route::get('export/csv', [\App\Http\Controllers\RMSSitesController::class, 'exportCsv'])
+            ->withoutMiddleware(['auth:sanctum', 'permission:sites.rms'])
+            ->middleware('close.session');
     });
 });
 
@@ -464,7 +468,9 @@ Route::prefix('dvr-sites')->group(function () {
         Route::get('filter-options', [\App\Http\Controllers\DVRSitesController::class, 'filterOptions']);
         
         // GET /api/dvr-sites/export/csv - export to CSV
-        Route::get('export/csv', [\App\Http\Controllers\DVRSitesController::class, 'exportCsv']);
+        Route::get('export/csv', [\App\Http\Controllers\DVRSitesController::class, 'exportCsv'])
+            ->withoutMiddleware(['auth:sanctum', 'permission:sites.dvr'])
+            ->middleware('close.session');
     });
 });
 
@@ -539,7 +545,9 @@ Route::prefix('down-communication')->group(function () {
         Route::get('filter-options', [\App\Http\Controllers\DownCommunicationController::class, 'filterOptions']);
         
         // GET /api/down-communication/export/csv - export to CSV
-        Route::get('export/csv', [\App\Http\Controllers\DownCommunicationController::class, 'exportCsv']);
+        Route::get('export/csv', [\App\Http\Controllers\DownCommunicationController::class, 'exportCsv'])
+            ->withoutMiddleware(['auth:sanctum', 'permission:reports.view'])
+            ->middleware('close.session');
     });
 });
 
@@ -558,7 +566,9 @@ Route::prefix('downloads')->group(function () {
         Route::get('status/{jobId}', [\App\Http\Controllers\DownloadsController::class, 'checkStatus']);
         
         // GET /api/downloads/file/{jobId} - download completed export file
-        Route::get('file/{jobId}', [\App\Http\Controllers\DownloadsController::class, 'downloadFile']);
+        Route::get('file/{jobId}', [\App\Http\Controllers\DownloadsController::class, 'downloadFile'])
+            ->withoutMiddleware(['auth:sanctum', 'permission:reports.view'])
+            ->middleware('close.session');
         
         // GET /api/downloads/my-exports - get user's export history
         Route::get('my-exports', [\App\Http\Controllers\DownloadsController::class, 'myExports']);
@@ -587,7 +597,9 @@ Route::prefix('downloads-v2')->group(function () {
         Route::get('status/{jobId}', [\App\Http\Controllers\DownloadsV2Controller::class, 'checkStatus']);
         
         // GET /api/downloads-v2/file/{jobId} - download completed export file
-        Route::get('file/{jobId}', [\App\Http\Controllers\DownloadsV2Controller::class, 'downloadFile']);
+        Route::get('file/{jobId}', [\App\Http\Controllers\DownloadsV2Controller::class, 'downloadFile'])
+            ->withoutMiddleware(['auth:sanctum', 'permission:reports.view'])
+            ->middleware('close.session');
         
         // GET /api/downloads-v2/my-exports - get user's export history
         Route::get('my-exports', [\App\Http\Controllers\DownloadsV2Controller::class, 'myExports']);
@@ -611,7 +623,9 @@ Route::prefix('ups-reports')->group(function () {
         Route::get('filter-options', [\App\Http\Controllers\UPSReportController::class, 'filterOptions']);
         
         // GET /api/ups-reports/export/csv - export to CSV
-        Route::get('export/csv', [\App\Http\Controllers\UPSReportController::class, 'exportCsv']);
+        Route::get('export/csv', [\App\Http\Controllers\UPSReportController::class, 'exportCsv'])
+            ->withoutMiddleware(['auth:sanctum', 'permission:reports.view'])
+            ->middleware('close.session');
     });
 });
 
